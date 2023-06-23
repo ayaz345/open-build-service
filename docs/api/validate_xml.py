@@ -27,15 +27,27 @@ def validate_schema(arg, dirname, filenames):
     found. The supported schema definitions are RelaxNG, Schematron and XML Schema.
     """
     for filename in filenames:
-        if filename.endswith('.xml'):                   # check for XML files
+        if filename.endswith('.xml'):           # check for XML files
             relname = os.path.join(dirname, filename)   # relative filename from working directory
             basename = relname.rsplit('.', 1)[0]        # split of the file ending (aka '.xml')
-            if os.path.exists(basename + '.xsd'):       # has a XML Schema file?
-                call("xmllint --noout --schema {0} {1}".format(basename + '.xsd', relname).split(' '))
-            elif os.path.exists(basename + '.rng'):     # has a RelaxNG schema file?
-                call("xmllint --noout --relaxng {0} {1}".format(basename + '.rng', relname).split(' '))
-            elif os.path.exists(basename + '.sch'):     # has a Schematron schema file? 
-                call("xmllint --noout --schematron {0} {1}".format(basename + '.sch', relname).split(' '))
+            if os.path.exists(f'{basename}.xsd'):       # has a XML Schema file?
+                call(
+                    "xmllint --noout --schema {0} {1}".format(
+                        f'{basename}.xsd', relname
+                    ).split(' ')
+                )
+            elif os.path.exists(f'{basename}.rng'):     # has a RelaxNG schema file?
+                call(
+                    "xmllint --noout --relaxng {0} {1}".format(
+                        f'{basename}.rng', relname
+                    ).split(' ')
+                )
+            elif os.path.exists(f'{basename}.sch'):     # has a Schematron schema file? 
+                call(
+                    "xmllint --noout --schematron {0} {1}".format(
+                        f'{basename}.sch', relname
+                    ).split(' ')
+                )
             else:                                       # has none unfortunately
                 print("no schema to validate {0}".format(relname))
 

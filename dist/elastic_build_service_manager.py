@@ -211,11 +211,7 @@ def fetch_metrics(elastic_build_hosts, job_status):
                         latest_value = value['Average']
 
                 # Let's make sure only absolute zero is shown as zero
-                if latest_value > 0 and latest_value < 1:
-                    cpu = 1
-                else:
-                    cpu = int(latest_value)
-
+                cpu = 1 if latest_value > 0 and latest_value < 1 else int(latest_value)
             except BotoServerError as serverErr:
                 dbg(json.dumps({
                         "error": "Error retrieving CloudWatch metrics."
@@ -236,7 +232,7 @@ def fetch_metrics(elastic_build_hosts, job_status):
     osc.conf.get_config()
     api = osc.conf.config['apiurl']
 
-    apitest = osc.core.http_GET(api + '/build/_workerstatus')
+    apitest = osc.core.http_GET(f'{api}/build/_workerstatus')
     dom = minidom.parseString(apitest.read())
 
     # store all idle workers
@@ -244,8 +240,9 @@ def fetch_metrics(elastic_build_hosts, job_status):
         build_host_ok = False
 
         # parse build host id from the worker id
-        parsed_hostname = node.getAttribute('workerid')\
-            [0:node.getAttribute('workerid').find("/")]
+        parsed_hostname = node.getAttribute('workerid')[
+            : node.getAttribute('workerid').find("/")
+        ]
 
         if parsed_hostname.startswith(cloud_buildhost_prefix):
             # try to find it from the list
@@ -259,15 +256,16 @@ def fetch_metrics(elastic_build_hosts, job_status):
             debug_status_string += "."
 
         if not build_host_ok:
-            dbg("WARN - Strange host " + parsed_hostname)
+            dbg(f"WARN - Strange host {parsed_hostname}")
 
     # store all busy workers
     for node in dom.getElementsByTagName('building'):
         build_host_ok = False
 
         # parse build host id from the worker id
-        parsed_hostname = node.getAttribute('workerid')\
-            [0:node.getAttribute('workerid').find("/")]
+        parsed_hostname = node.getAttribute('workerid')[
+            : node.getAttribute('workerid').find("/")
+        ]
 
         if parsed_hostname.startswith(cloud_buildhost_prefix):
             for build_host in elastic_build_hosts:
@@ -280,7 +278,7 @@ def fetch_metrics(elastic_build_hosts, job_status):
             debug_status_string += "o"
 
         if not build_host_ok:
-            dbg("WARN - Strange host " + parsed_hostname + " or not building")
+            dbg(f"WARN - Strange host {parsed_hostname} or not building")
 
     # count the total amount of waiting jobs
     for node in dom.getElementsByTagName('waiting'):
@@ -297,8 +295,8 @@ def fetch_metrics(elastic_build_hosts, job_status):
 # parameter region. Region names can be obtained from AWS.
 def connect_to_ec2(region):
     connection = boto.ec2.connect_to_region(region)
-    dbg("INFO - Connected to: " + connection.host + ":" + str(connection.port))
-    dbg("INFO - Secure connection: " + str(connection.is_secure))
+    dbg(f"INFO - Connected to: {connection.host}:{str(connection.port)}")
+    dbg(f"INFO - Secure connection: {str(connection.is_secure)}")
     return connection
 
 
@@ -361,18 +359,13 @@ def dbg(message):
 def log_write(message):
 
     global cron_mode
-    manual_mode_notice = " MAN"
-    if cron_mode:
-        manual_mode_notice = ""
-
+    manual_mode_notice = "" if cron_mode else " MAN"
     # Log only real actual events and not simulated runs
     global print_only
     global log_path
     if not print_only:
-        f = open(log_path, 'a')
-        f.write(str(datetime.datetime.now()) + " " + message +
-                manual_mode_notice + "\n")
-        f.close()
+        with open(log_path, 'a') as f:
+            f.write(f"{str(datetime.datetime.now())} {message}{manual_mode_notice}" + "\n")
     return
 
 
@@ -405,8 +398,6 @@ def analyze_current_situation(elastic_build_hosts, jobs):
     booting_time = 5
 
     max_kills_per_run = 5 # Max amount of hosts to terminate on one run
-    max_hosts = 15 # Max number of _running_ instances at any time
-    max_instances_starting_up = 5 # Max amount of hosts starting at same time
     cpu_too_high = 20 # CPU percentage that is considered too high for idle
     cpu_too_low = 5 # CPU percentage that is considered too low for building
 
@@ -423,81 +414,83 @@ def analyze_current_situation(elastic_build_hosts, jobs):
         should_be_terminated = True
         name = host['instance_name']
 
-        # Check all not terminated workers
-        if ((host['instance_state'] == 'running') or \
-                (host['instance_state'] == 'pending')) and \
-                host['instance_name'].startswith(cloud_buildhost_prefix):
+        if host['instance_state'] in [
+            'running',
+            'pending',
+        ] and name.startswith(cloud_buildhost_prefix):
 
             instances_alive += 1
             workers_total = len(host['workers'])
 
             # Check connection to OBS server
             if workers_total <= 0:
-                dbg("WARN - " + name + " is not connected")
+                dbg(f"WARN - {name} is not connected")
                 debug_status_string += "C" # not connected
 
             else:
-                # Count idle workers
-                workers_idle = 0
-                for worker in host['workers']:
-                    if worker == 'IDLE':
-                        workers_idle += 1
-
+                workers_idle = sum(1 for worker in host['workers'] if worker == 'IDLE')
                 # All workers are idle
                 if workers_total == workers_idle:
                     if host['cpu'] > cpu_too_high:
-                        dbg("WARN - " + name + " has high cpu (" +\
-                                str(host['cpu']) + ") for idle. Crashed?")
+                        dbg(
+                            f"WARN - {name} has high cpu ("
+                            + str(host['cpu'])
+                            + ") for idle. Crashed?"
+                        )
                     if jobs['jobs_waiting_sum'] > 0:
-                        dbg("ERR  - "+name+" has all idle but there's work")
+                        dbg(f"ERR  - {name} has all idle but there's work")
                         debug_status_string += "L" # lazy worker
+                    elif host['time_left'] < ttl_threshold:
+                        dbg(f"OK   - {name} idle and time to die.")
+                        debug_status_string += "u" # unemployed
                     else:
-                        if host['time_left'] < ttl_threshold:
-                            dbg("OK   - " + name + " idle and time to die.")
-                            debug_status_string += "u" # unemployed
-                        else:
-                            dbg("OK   - " + name + " is idle, wait " +\
-                                    str(host['time_left']-ttl_threshold) +\
-                                    " more mins")
-                            debug_status_string += "i" # idle
-                            should_be_terminated = False
+                        dbg(
+                            f"OK   - {name} is idle, wait "
+                            + str(host['time_left'] - ttl_threshold)
+                            + " more mins"
+                        )
+                        debug_status_string += "i" # idle
+                        should_be_terminated = False
 
-                # All workers are working
                 elif workers_idle == 0:
                     if host['cpu'] < cpu_too_low:
-                        dbg("WARN - " + name + " has quite low cpu (" +\
-                                str(host['cpu'])+ ") for building.")
+                        dbg(
+                            f"WARN - {name} has quite low cpu ("
+                            + str(host['cpu'])
+                            + ") for building."
+                        )
                         debug_status_string += "W" # working + warning
-                        should_be_terminated = False
                     else:
-                        dbg("OK   - " + name + " has all workers busy.")
+                        dbg(f"OK   - {name} has all workers busy.")
                         debug_status_string += "w" # working
-                        should_be_terminated = False
-
-                # Some are working and some idling
+                    should_be_terminated = False
                 else:
                     if jobs['jobs_waiting_sum'] > 0:
-                        dbg("WARN  - " + name +\
-                                " some workers idle but there's work")
+                        dbg(f"WARN  - {name} some workers idle but there's work")
                         debug_status_string += "M" # working + warning
-                        should_be_terminated = False
                     else:
-                        dbg("OK   - " + name + " some workers idle, no jobs")
+                        dbg(f"OK   - {name} some workers idle, no jobs")
                         debug_status_string += "m" # working
-                        should_be_terminated = False
-
+                    should_be_terminated = False
             # Terminate extra worker
             age = ((datetime.datetime.now() - host['launch_time']).seconds)/60
-            if should_be_terminated:
-                if age < booting_time:
+            if age < booting_time:
+                if should_be_terminated:
                     instances_starting_up += 1
-                    dbg("OK   - " + name + " is " + str(age) +\
-                            " mins old and may still be starting up. Give it "\
-                            + str(booting_time-(60 - host['time_left'])) +\
-                            " more minutes to boot.")
-                elif instances_terminated_this_cycle >= max_kills_per_run:
+                    dbg(
+                        (
+                            (
+                                f"OK   - {name} is {str(age)} mins old and may still be starting up. Give it "
+                                + str(booting_time - (60 - host['time_left']))
+                            )
+                            + " more minutes to boot."
+                        )
+                    )
+            elif instances_terminated_this_cycle >= max_kills_per_run:
+                if should_be_terminated:
                     dbg("WARN - max amount of kills reached.")
-                else:
+            else:
+                if should_be_terminated:
                     instances_terminated_this_cycle += 1
                     instances_alive -= 1
                     dbg("TERM - " + host['instance_id'])
@@ -505,15 +498,23 @@ def analyze_current_situation(elastic_build_hosts, jobs):
                     host['instance_state'] = "TERMINATING"
                     debug_status_string += "-" # terminating instance
 
-    dbg("INFO - alive:"+str(instances_alive) + ", terminated_this_cycle:" +\
-            str(instances_terminated_this_cycle) +", jobs:" +\
-            str(jobs['jobs_waiting_sum']) + ", starting:" +\
-            str(instances_starting_up))
+    dbg(
+        (
+            (
+                f"INFO - alive:{str(instances_alive)}, terminated_this_cycle:{str(instances_terminated_this_cycle)}, jobs:"
+                + str(jobs['jobs_waiting_sum'])
+            )
+            + ", starting:"
+        )
+        + str(instances_starting_up)
+    )
 
     #### START NEW BUILD HOSTS IF NEEDED
     if jobs['jobs_waiting_sum'] > 0:
         dbg("OK   - " + str(jobs['jobs_waiting_sum']) + " jobs ready, spawn!")
 
+        max_hosts = 15 # Max number of _running_ instances at any time
+        max_instances_starting_up = 5 # Max amount of hosts starting at same time
         # Start more if limits have not been met
         # TODO: This expects that 1 build host == 1 worker == 1 core!
         while (jobs['jobs_waiting_sum']-instances_starting_up) > 0 and \
@@ -525,10 +526,16 @@ def analyze_current_situation(elastic_build_hosts, jobs):
             instances_started_this_cycle += 1
             debug_status_string += "+" # starting instance
 
-    dbg("INFO - alive:"+str(instances_alive) + ", started_this_cycle:" +\
-            str(instances_started_this_cycle) +", jobs:" +\
-            str(jobs['jobs_waiting_sum']) + ", starting:" +\
-            str(instances_starting_up))
+    dbg(
+        (
+            (
+                f"INFO - alive:{str(instances_alive)}, started_this_cycle:{str(instances_started_this_cycle)}, jobs:"
+                + str(jobs['jobs_waiting_sum'])
+            )
+            + ", starting:"
+        )
+        + str(instances_starting_up)
+    )
 
     #### WRITE TO LOG
     if instances_started_this_cycle > 0 or \
